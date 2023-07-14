@@ -13,7 +13,7 @@ from mysql.connector import Error
 from telebot.types import ReplyKeyboardRemove
 from dotenv import load_dotenv
 
-load_dotenv(".config/.env")
+load_dotenv("config/env")
 
 BOT_API_KEY = os.getenv('BOT_API_KEY')
 BOT_MANAGER_NICKNAME = os.getenv('BOT_MANAGER_NICKNAME')
@@ -34,7 +34,7 @@ PORT = os.getenv('PORT')
 
 bot = telebot.TeleBot(BOT_API_KEY)
 
-gc = gspread.service_account(filename='.config/gspread/' + GOOGLE_SHEET_CONFIG)
+gc = gspread.service_account(filename='config/gspread/' + GOOGLE_SHEET_CONFIG)
 sh = gc.open(GOOGLE_SHEET_NAME)
 
 dbConnection = ''
