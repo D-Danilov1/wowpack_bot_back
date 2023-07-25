@@ -6,6 +6,7 @@ import datetime
 import flask
 import gspread
 import telebot
+from fast_bitrix24 import Bitrix
 from telebot import types
 from flask import Flask, request, make_response, redirect, abort
 import mysql.connector
@@ -20,6 +21,8 @@ BOT_MANAGER_NICKNAME = os.getenv('BOT_MANAGER_NICKNAME')
 
 GOOGLE_SHEET_CONFIG = os.getenv('GOOGLE_SHEET_CONFIG')
 GOOGLE_SHEET_NAME = os.getenv('GOOGLE_SHEET_NAME')
+
+BITRIX_LINK = os.getenv('BITRIX_LINK')
 
 DB_HOST = os.getenv('DB_HOST')
 DB_DATABASE = os.getenv('DB_DATABASE')
@@ -36,11 +39,13 @@ bot = telebot.TeleBot(BOT_API_KEY)
 
 gc = gspread.service_account(filename='config/gspread/' + GOOGLE_SHEET_CONFIG)
 sh = gc.open(GOOGLE_SHEET_NAME)
+b = Bitrix(BITRIX_LINK)
 
 dbConnection = ''
 
 while not dbConnection:
     try:
+        print("Connecting to DB")
         dbConnection = mysql.connector.connect(
             host=DB_HOST,
             database=DB_DATABASE,
@@ -48,6 +53,8 @@ while not dbConnection:
             password=DB_PASSWORD)
     except Error as e:
         print("Error while connecting to MySQL", e)
+
+print("Connected to DB")
 
 application = Flask(__name__)
 application.config['JSON_AS_ASCII'] = False
@@ -58,17 +65,23 @@ threading.Thread(target=lambda: application.run(host=HOST, port=PORT)).start()
 @application.route('/', methods=['GET', 'POST'])
 def flask_ok():
     if request.cookies.get('logged') == "True":
-        return "<h1>logged</h1>"
+        res = make_response(redirect('/dashboard/index'))
+        return res
     else:
         return "<h1>auth page</h1>"
 
 
-@application.route('/login', methods=['POST'])
+@application.route('/login', methods=['GET'])
 def flask_login():
-    args = request.form
-    if args['login'] == ADMIN_LOGIN and args['password'] == ADMIN_PASSWORD:
-        res = make_response(redirect('/'))
+    args = request.args
+    if args.get('login') == ADMIN_LOGIN and args.get('password') == ADMIN_PASSWORD:
+        res = make_response(redirect('login'))
         res.set_cookie('logged', 'True')
+        res.headers.add('Access-Control-Allow-Methods', 'PUT, GET, HEAD, POST, DELETE, OPTIONS')
+        res.headers.add('Access-Control-Allow-Credentials', 'true')
+        res.headers.add('Access-Control-Allow-Headers', '*')
+        res.headers.add('Access-Control-Allow-Origin', '*')
+        res.headers.add('Access-Control-Max-Age', 86400)
         return res
     else:
         abort(403)
@@ -77,6 +90,7 @@ def flask_login():
 @application.route('/getUsers', methods=['GET'])
 def flask_getUsers():
     if request.cookies.get('logged') == "True":
+        dbConnection.ping(True)
         cursor = dbConnection.cursor()
         cursor.execute(f"""\
         SELECT * FROM users
@@ -91,7 +105,7 @@ def flask_getUsers():
         response.headers.add('Access-Control-Allow-Methods', 'PUT, GET, HEAD, POST, DELETE, OPTIONS')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         response.headers.add('Access-Control-Allow-Headers', '*')
-        response.headers.add('Access-Control-Allow-Origin', 'ORIGIN')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Max-Age', 86400)
         return response
     else:
@@ -106,6 +120,7 @@ def json_serial_time(o):
 @application.route('/getActions', methods=['GET'])
 def flask_getActions():
     if request.cookies.get('logged') == "True":
+        dbConnection.ping(True)
         cursor = dbConnection.cursor()
         cursor.execute(f"""\
         SELECT actions.id, actions.action_user_id, users.user_phone, actions.action_order, actions.action_date FROM actions, users WHERE actions.action_user_id = users.user_id
@@ -127,13 +142,13 @@ def flask_getActions():
 
 @application.route('/sendMessages', methods=['POST'])
 def flask_sendMessages():
-    if request.cookies.get('logged') == "True":
-        args = request.form
-        for user in args['users'].split(','):
+    if True: #request.cookies.get('logged') == "True":
+        args = request.args
+        formattedMessage = str(args.get('message')).replace('\\n', '\n').replace('\\t', '\t')
+        for user in args.get('users').split(','):
             print(user)
-            bot.send_message(user, f"""\
-            {args['message']}
-            """)
+            print(f"{formattedMessage}")
+            bot.send_message(user, f"{formattedMessage}")
         return "ok"
     else:
         abort(401)
@@ -157,6 +172,20 @@ def send_welcome(message):
         """)
 
 
+@bot.message_handler(commands=['stop'], func=lambda message: True)
+def stop_bot(message):
+    try:
+        msg = bot.send_message(message.chat.id, """\
+        Бот остановлен
+        """, )
+        bot.register_next_step_handler(msg, send_welcome)
+    except:
+        bot.send_message(message.chat.id, f"""
+        ❌Регистрация не удалась.
+        Пожалуйста, попробуйте чуть позже.
+        """)
+
+
 @bot.message_handler(content_types=['contact'])
 def registration_enterPhone(message):
     # bot.edit_message_reply_markup(message.chat.id, message.message_id-1, None)
@@ -165,8 +194,11 @@ def registration_enterPhone(message):
         print("contact")
         registration_checkPhone(message.chat.id, message.contact.phone_number, message)
     elif message.text is not None:
-        print("text")
-        registration_checkPhone(message.chat.id, message.text, message)
+        if message.text == "/stop":
+            stop_bot(message)
+        else:
+            print("text")
+            registration_checkPhone(message.chat.id, message.text, message)
     else:
         msg = bot.send_message(message.chat.id, """\
         Извини, мы не смогли считать номер телефона из контакта. Попробуй отправить его вручную.
@@ -189,6 +221,28 @@ def registration_checkPhone(chatId, message, info):
             phoneNumber = phone.group(0)
 
         print(phoneNumber)
+
+        contacts = b.get_all('crm.contact.list',
+                          params={
+                              'select': ['COMMENTS']})
+
+        isPhoneFound = False
+        for contact in contacts:
+            if str(contact['COMMENTS']).find(phoneNumber) > -1:
+                isPhoneFound = True
+
+        if not isPhoneFound:
+            managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
+                                                            url='https://t.me/' + BOT_MANAGER_NICKNAME)
+            managerKeyboard = types.InlineKeyboardMarkup()
+            managerKeyboard.add(managerContact_btn)
+            msg = bot.send_message(chatId, """\
+                                    Извини, мы не смогли найти номер телефона в нашей базе. Проверь его правильность и попробуй ещё раз.
+                                    """, reply_markup=managerKeyboard)
+            bot.register_next_step_handler(msg, registration_enterPhone)
+            return None
+
+
         userUpdate(chatId, info.from_user.username, phoneNumber, info.from_user.first_name, info.from_user.last_name)
 
         msg = bot.send_message(chatId, f"""
@@ -210,6 +264,10 @@ def registration_checkPhone(chatId, message, info):
 @bot.message_handler(func=lambda m: True)
 def order_findOrder(message):
     orderNumber = message.text
+
+    if message.text == "/stop":
+        stop_bot(message)
+        return None
 
     managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
                                                     url='https://t.me/' + BOT_MANAGER_NICKNAME)
