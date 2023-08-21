@@ -1,9 +1,13 @@
+import json
 import os
 import threading
 import re
-import datetime
+from datetime import datetime
+import webbrowser
+import random
 
 import flask
+from flask import render_template
 import gspread
 import telebot
 from fast_bitrix24 import Bitrix
@@ -11,7 +15,7 @@ from telebot import types
 from flask import Flask, request, make_response, redirect, abort
 import mysql.connector
 from mysql.connector import Error
-from telebot.types import ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardRemove, WebAppInfo
 from dotenv import load_dotenv
 
 load_dotenv("config/env")
@@ -31,6 +35,8 @@ DB_PASSWORD = os.getenv('DB_PASSWORD')
 
 ADMIN_LOGIN = os.getenv('ADMIN_LOGIN')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+
+WHEEL_DAYS = os.getenv('WHEEL_DAYS')
 
 HOST = os.getenv('HOST')
 PORT = os.getenv('PORT')
@@ -71,6 +77,49 @@ def flask_ok():
         return "<h1>auth page</h1>"
 
 
+@application.route('/updateSheetCallback', methods=['GET'])
+def flask_updateSheetCallback():
+    #Get data from request
+    args = request.args
+    order_key = args.get('order_key')
+    send_date = args.get('send_date')
+    status = args.get('status')
+    predicted_date = args.get('predicted_date')
+
+    if order_key == "" or send_date == "" or status == "" or predicted_date == "":
+        return "err_empty"
+
+    try:
+        dbConnection.ping(True)
+
+        cursor = dbConnection.cursor()
+        cursor.execute(f"""\
+                SELECT track_user FROM track WHERE track_order = '{order_key}'
+                """)
+        usersList = cursor.fetchall()
+        for user in usersList:
+            print(user)
+            #Send message if found
+            managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
+                                                            url='https://t.me/' + BOT_MANAGER_NICKNAME)
+            managerKeyboard = types.InlineKeyboardMarkup()
+            managerKeyboard.add(managerContact_btn)
+
+            formatedSendDate = datetime.strptime(send_date[:-17], '%a %b %d %Y %H:%M:%S %Z')
+            formatedPredictedDate = datetime.strptime(predicted_date[:-17], '%a %b %d %Y %H:%M:%S %Z')
+
+            bot.send_message(user[0], f"""\
+Обновление статуса заказа
+
+Номер груза: `{order_key}`
+Дата отправки: {formatedSendDate.strftime("%d.%m.%Y")}
+Примерная дата поступления: {formatedPredictedDate.strftime("%d.%m.%Y")}
+Статус: *{status}*
+            """, reply_markup=managerKeyboard, parse_mode='Markdown')
+        return "ok"
+    except Exception as e:
+        print(e)
+
 @application.route('/login', methods=['GET'])
 def flask_login():
     args = request.args
@@ -89,7 +138,7 @@ def flask_login():
 
 @application.route('/getUsers', methods=['GET'])
 def flask_getUsers():
-    if request.cookies.get('logged') == "True":
+    if True: #request.cookies.get('logged') == "True":
         dbConnection.ping(True)
         cursor = dbConnection.cursor()
         cursor.execute(f"""\
@@ -140,11 +189,11 @@ def flask_getActions():
         abort(401)
 
 
-@application.route('/sendMessages', methods=['POST'])
+@application.route('/sendMessages', methods=['POST', 'GET'])
 def flask_sendMessages():
     if True: #request.cookies.get('logged') == "True":
         args = request.args
-        formattedMessage = str(args.get('message')).replace('\\n', '\n').replace('\\t', '\t')
+        formattedMessage = str(args.get('message')).replace('\\n', '\n').replace('\\t', '\t')[1:-1]
         for user in args.get('users').split(','):
             print(user)
             print(f"{formattedMessage}")
@@ -153,16 +202,91 @@ def flask_sendMessages():
     else:
         abort(401)
 
+@application.route('/wheel', methods=['GET'])
+def flask_wheel():
+    return render_template('wheel.html')
+@application.route('/getWheelPrizes', methods=['GET'])
+def flask_getWheelPrizes():
+    args = request.args
+    user_id = str(args.get('user_id'))
+
+    dbConnection.ping(True)
+    cursor = dbConnection.cursor()
+    cursor.execute(f"""\
+            SELECT * FROM users WHERE users.user_id = {user_id}
+            """)
+    usersList = cursor.fetchall()
+
+    if(len(usersList) == 0): abort(401)
+
+    cursor = dbConnection.cursor()
+    cursor.execute(f"""\
+                SELECT * FROM winners WHERE winners.winner_user_id = {user_id} ORDER BY winner_date DESC
+                """)
+    winnersList = cursor.fetchall()
+
+    if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
+
+    json_data = [
+        {"id": 0, "name": "Скидка 40%", "link": "delivery.jpg"},
+        {"id": 1, "name": "Скидка 20%", "link": "delivery.jpg"},
+        {"id": 2, "name": "Скидка 10%", "link": "delivery.jpg"},
+        {"id": 3, "name": "Бесплатная доставка", "link": "delivery.jpg"},
+        {"id": 4, "name": "Все бесплатно", "link": "delivery.jpg"},
+    ]
+    response = flask.jsonify(json_data)
+    return response
+
+@application.route('/getWinner', methods=['GET'])
+def flask_getWinner():
+    args = request.args
+    user_id = str(args.get('user_id'))
+
+    dbConnection.ping(True)
+    cursor = dbConnection.cursor()
+    cursor.execute(f"""\
+                SELECT * FROM users WHERE users.user_id = {user_id}
+                """)
+    usersList = cursor.fetchall()
+
+    if (len(usersList) == 0): abort(401)
+
+    cursor = dbConnection.cursor()
+    cursor.execute(f"""\
+                    SELECT * FROM winners WHERE winners.winner_user_id = {user_id} ORDER BY winner_date DESC
+                    """)
+    winnersList = cursor.fetchall()
+
+    if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
+
+    json_data = [
+        {"id":0, "name": "Скидка 40%", "link":"delivery.jpg"},
+        {"id":1, "name": "Скидка 20%", "link":"delivery.jpg"},
+        {"id":2, "name": "Скидка 10%", "link":"delivery.jpg"},
+        {"id":3, "name": "Бесплатная доставка", "link":"delivery.jpg"},
+        {"id":4, "name": "Все бесплатно", "link":"delivery.jpg"},
+    ]
+    chances = (0.4, 0.7, 0.8, 0.8, 0.1)
+
+    selectedPrize = random.choices(json_data, weights=chances, k=1)
+
+    response = flask.jsonify(selectedPrize)
+
+    #addWinner(user_id, selectedPrize[0]['name'])
+
+    return response
+
 
 # Handle '/start'
 @bot.message_handler(commands=['start'], func=lambda message: True)
 def send_welcome(message):
     try:
-        keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+        userUpdate(message.chat.id, message.from_user.username, "0000000000", message.from_user.first_name, message.from_user.last_name, 1)
+        keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=True)
         button_phone = types.KeyboardButton(text="Отправить номер телефона", request_contact=True)
         keyboard.add(button_phone)
         msg = bot.send_message(message.chat.id, """\
-        Привет! Для идентификации отправь свой номер телефона или нажми на кнопку
+        Здравствуйте! Для идентификации отправьте свой номер телефона или нажмите на кнопку
         """, reply_markup=keyboard)
         bot.register_next_step_handler(msg, registration_enterPhone)
     except:
@@ -201,7 +325,7 @@ def registration_enterPhone(message):
             registration_checkPhone(message.chat.id, message.text, message)
     else:
         msg = bot.send_message(message.chat.id, """\
-        Извини, мы не смогли считать номер телефона из контакта. Попробуй отправить его вручную.
+        Извините, мы не смогли считать номер телефона из контакта. Попробуйте отправить его вручную.
         """, )
         bot.register_next_step_handler(msg, registration_enterPhone)
 
@@ -214,49 +338,53 @@ def registration_checkPhone(chatId, message, info):
         for i in special_characters:
             tempMessage = tempMessage.replace(i, "")
 
-        phone = re.search(r"^(\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$", tempMessage)
-        if len(phone.group(1) if phone.group(1) != None else "PLUG") <= 2:  # Because I can
-            phoneNumber = phone.group(0)[len(phone.group(1)):]
-        else:
-            phoneNumber = phone.group(0)
+        # phone = re.search(r"^(\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$", tempMessage)
+        # if len(phone.group(1) if phone.group(1) != None else "PLUG") <= 2:  # Because I can
+        #     phoneNumber = phone.group(0)[len(phone.group(1)):]
+        # else:
+        #     phoneNumber = phone.group(0)
 
-        print(phoneNumber)
+        print(tempMessage)
 
-        contacts = b.get_all('crm.contact.list',
-                          params={
-                              'select': ['COMMENTS']})
+        # contacts = b.get_all('crm.contact.list',
+        #                   params={
+        #                       'select': ['COMMENTS']})
+        #
+        # isPhoneFound = False
+        # for contact in contacts:
+        #     if str(contact['COMMENTS']).find(phoneNumber) > -1:
+        #         isPhoneFound = True
+        #
+        # if not isPhoneFound:
+        #     managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
+        #                                                     url='https://t.me/' + BOT_MANAGER_NICKNAME)
+        #     managerKeyboard = types.InlineKeyboardMarkup()
+        #     managerKeyboard.add(managerContact_btn)
+        #     msg = bot.send_message(chatId, """\
+        #                             Извини, мы не смогли найти номер телефона в нашей базе. Проверь его правильность и попробуй ещё раз.
+        #                             """, reply_markup=managerKeyboard)
+        #     bot.register_next_step_handler(msg, registration_enterPhone)
+        #     return None
 
-        isPhoneFound = False
-        for contact in contacts:
-            if str(contact['COMMENTS']).find(phoneNumber) > -1:
-                isPhoneFound = True
+        userUpdate(chatId, info.from_user.username, tempMessage, info.from_user.first_name, info.from_user.last_name, 0)
 
-        if not isPhoneFound:
-            managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
-                                                            url='https://t.me/' + BOT_MANAGER_NICKNAME)
-            managerKeyboard = types.InlineKeyboardMarkup()
-            managerKeyboard.add(managerContact_btn)
-            msg = bot.send_message(chatId, """\
-                                    Извини, мы не смогли найти номер телефона в нашей базе. Проверь его правильность и попробуй ещё раз.
-                                    """, reply_markup=managerKeyboard)
-            bot.register_next_step_handler(msg, registration_enterPhone)
-            return None
-
-
-        userUpdate(chatId, info.from_user.username, phoneNumber, info.from_user.first_name, info.from_user.last_name)
+        managerKeyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        wheel = types.InlineKeyboardButton(text="Колесо удачи", web_app=WebAppInfo(url="https://127.0.0.1:8000/wheel"))
+        managerContact_btn = types.KeyboardButton('Связаться с менеджером')
+        managerKeyboard.add(managerContact_btn, wheel)
 
         msg = bot.send_message(chatId, f"""
-        Номер записан. Теперь можешь присылать боту номера заказов, а он расскажет о их статусе.
-        """, reply_markup=ReplyKeyboardRemove())
+        Отлично! Теперь можете присылать боту номера заказов, а он расскажет о их статусе.
+        """, reply_markup=managerKeyboard)
         bot.register_next_step_handler(msg, order_findOrder)
 
     except Exception as e:
         print(e)
-        keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+        keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=True)
         button_phone = types.KeyboardButton(text="Отправить номер телефона", request_contact=True)
         keyboard.add(button_phone)
         msg = bot.send_message(chatId, """\
-        Извини, мы не смогли распознать номер телефона. Попробуй отправить его ещё раз.
+        Извините, мы не смогли распознать номер телефона. Попробуйте отправить его ещё раз.
         """, reply_markup=keyboard)
         bot.register_next_step_handler(msg, registration_enterPhone)
 
@@ -269,10 +397,9 @@ def order_findOrder(message):
         stop_bot(message)
         return None
 
-    managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
-                                                    url='https://t.me/' + BOT_MANAGER_NICKNAME)
-    managerKeyboard = types.InlineKeyboardMarkup()
-    managerKeyboard.add(managerContact_btn)
+    if message.text == "Связаться с менеджером":
+        webbrowser.open('https://t.me/' + BOT_MANAGER_NICKNAME)
+        return None
 
     try:
         cell = sh.sheet1.find(orderNumber, in_column=1)
@@ -284,29 +411,37 @@ def order_findOrder(message):
 Дата отправки: {sh.sheet1.cell(cell.row, 2).value}
 Примерная дата поступления: {sh.sheet1.cell(cell.row, 4).value}
 Статус: *{sh.sheet1.cell(cell.row, 3).value}*
-        """, reply_markup=managerKeyboard, parse_mode='Markdown')
+        """, parse_mode='Markdown')
         bot.register_next_step_handler(msg, order_findOrder)
+
+        addTrack(message.chat.id, orderNumber)
     except Exception as e:
         msg = bot.send_message(message.chat.id, f"""\
-        Извини, мы не смогли найти заказ. Проверь номер заказа и отправь его ещё раз.
-        """, reply_markup=managerKeyboard)
+        Извините, мы не смогли найти заказ. Проверьте номер заказа и отправь его ещё раз.
+        """)
         bot.register_next_step_handler(msg, order_findOrder)
 
+@bot.message_handler(content_types="web_app_data") #получаем отправленные данные
+def wheelAnswer(webAppMes):
+   print(webAppMes) #вся информация о сообщении
+   print(webAppMes.web_app_data.data) #конкретно то что мы передали в бота
+   bot.send_message(webAppMes.chat.id, f"получили инофрмацию из веб-приложения: {webAppMes.web_app_data.data}")
+   #отправляем сообщение в ответ на отправку данных из веб-приложения
 
-def userUpdate(chatId, username, phone, name, surname):
+
+def userUpdate(chatId, username, phone, name, surname, isNew):
     try:
         dbConnection.ping(True)
         cursor = dbConnection.cursor()
         cursor.execute(f"""
-                INSERT INTO users (user_id, user_nick, user_phone, user_name, user_surname) 
-                VALUES({chatId}, '{username}', {phone}, '{name}', '{surname}') 
+                INSERT INTO users (user_id, user_nick, user_phone, user_name, user_surname, user_is_new) 
+                VALUES({chatId}, '{username}', {phone}, '{name}', '{surname}','{isNew}') 
                 ON DUPLICATE KEY 
-                UPDATE user_id={chatId}, user_nick='{username}', user_phone={phone}, user_name='{name}', user_surname='{surname}'
+                UPDATE user_id={chatId}, user_nick='{username}', user_phone={phone}, user_name='{name}', user_surname='{surname}', user_is_new='{isNew}'
                 """)
         dbConnection.commit()
     except Exception as e:
         print(e)
-
 
 def userActions(chatId, order):
     try:
@@ -316,6 +451,40 @@ def userActions(chatId, order):
                     INSERT INTO actions (action_user_id, action_order, action_date) 
                     VALUES({chatId}, '{order}', NOW()) 
                     """)
+        dbConnection.commit()
+    except Exception as e:
+        print(e)
+
+def addTrack(chatId, order):
+    try:
+        dbConnection.ping(True)
+
+        cursor = dbConnection.cursor()
+        cursor.execute(f"""\
+                SELECT * FROM track WHERE track_order = '{order}' AND track_user = '{chatId}'
+                """)
+        usersList = cursor.fetchall()
+        if len(usersList) > 0:
+            return None
+
+        cursor = dbConnection.cursor()
+        cursor.execute(f"""
+                INSERT INTO track (track_order, track_user) 
+                VALUES('{order}', '{chatId}') 
+                """)
+        dbConnection.commit()
+    except Exception as e:
+        print(e)
+
+def addWinner(chatId, prize):
+    try:
+        dbConnection.ping(True)
+
+        cursor = dbConnection.cursor()
+        cursor.execute(f"""
+                INSERT INTO winners (winner_user_id, winner_phone, winner_prize) 
+                VALUES('{chatId}', (SELECT user_phone FROM users WHERE users.user_id = '{chatId}'), '{prize}')  
+                """)
         dbConnection.commit()
     except Exception as e:
         print(e)
