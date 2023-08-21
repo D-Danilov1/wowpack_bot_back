@@ -79,7 +79,7 @@ def flask_ok():
 
 @application.route('/updateSheetCallback', methods=['GET'])
 def flask_updateSheetCallback():
-    #Get data from request
+    # Get data from request
     args = request.args
     order_key = args.get('order_key')
     send_date = args.get('send_date')
@@ -99,7 +99,7 @@ def flask_updateSheetCallback():
         usersList = cursor.fetchall()
         for user in usersList:
             print(user)
-            #Send message if found
+            # Send message if found
             managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
                                                             url='https://t.me/' + BOT_MANAGER_NICKNAME)
             managerKeyboard = types.InlineKeyboardMarkup()
@@ -120,6 +120,7 @@ def flask_updateSheetCallback():
     except Exception as e:
         print(e)
 
+
 @application.route('/login', methods=['GET'])
 def flask_login():
     args = request.args
@@ -138,7 +139,7 @@ def flask_login():
 
 @application.route('/getUsers', methods=['GET'])
 def flask_getUsers():
-    if True: #request.cookies.get('logged') == "True":
+    if True:  # request.cookies.get('logged') == "True":
         dbConnection.ping(True)
         cursor = dbConnection.cursor()
         cursor.execute(f"""\
@@ -191,7 +192,7 @@ def flask_getActions():
 
 @application.route('/sendMessages', methods=['POST', 'GET'])
 def flask_sendMessages():
-    if True: #request.cookies.get('logged') == "True":
+    if True:  # request.cookies.get('logged') == "True":
         args = request.args
         formattedMessage = str(args.get('message')).replace('\\n', '\n').replace('\\t', '\t')[1:-1]
         for user in args.get('users').split(','):
@@ -202,9 +203,14 @@ def flask_sendMessages():
     else:
         abort(401)
 
+
+# Wheel section
+
 @application.route('/wheel', methods=['GET'])
 def flask_wheel():
     return render_template('wheel.html')
+
+
 @application.route('/getWheelPrizes', methods=['GET'])
 def flask_getWheelPrizes():
     args = request.args
@@ -217,7 +223,7 @@ def flask_getWheelPrizes():
             """)
     usersList = cursor.fetchall()
 
-    if(len(usersList) == 0): abort(401)
+    if (len(usersList) == 0): abort(401)
 
     cursor = dbConnection.cursor()
     cursor.execute(f"""\
@@ -225,17 +231,19 @@ def flask_getWheelPrizes():
                 """)
     winnersList = cursor.fetchall()
 
-    if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
+    # if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
 
-    json_data = [
-        {"id": 0, "name": "Скидка 40%", "link": "delivery.jpg"},
-        {"id": 1, "name": "Скидка 20%", "link": "delivery.jpg"},
-        {"id": 2, "name": "Скидка 10%", "link": "delivery.jpg"},
-        {"id": 3, "name": "Бесплатная доставка", "link": "delivery.jpg"},
-        {"id": 4, "name": "Все бесплатно", "link": "delivery.jpg"},
-    ]
+    prizes = b.get_all('crm.contact.fields')
+    json_data = []
+
+    for id, x in enumerate(prizes['UF_CRM_1692611885']['items']):
+        prize = str(x['VALUE']).split('|')
+        if prize[2] == "Y":
+            json_data.append({"id": id, "name": prize[0], "link": prize[3] + '.jpg'})
+
     response = flask.jsonify(json_data)
     return response
+
 
 @application.route('/getWinner', methods=['GET'])
 def flask_getWinner():
@@ -257,23 +265,49 @@ def flask_getWinner():
                     """)
     winnersList = cursor.fetchall()
 
-    if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
+    # if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
 
-    json_data = [
-        {"id":0, "name": "Скидка 40%", "link":"delivery.jpg"},
-        {"id":1, "name": "Скидка 20%", "link":"delivery.jpg"},
-        {"id":2, "name": "Скидка 10%", "link":"delivery.jpg"},
-        {"id":3, "name": "Бесплатная доставка", "link":"delivery.jpg"},
-        {"id":4, "name": "Все бесплатно", "link":"delivery.jpg"},
-    ]
-    chances = (0.4, 0.7, 0.8, 0.8, 0.1)
+    prizes = b.get_all('crm.contact.fields')
+    json_data = []
+    chances = []
+
+    for id, x in enumerate(prizes['UF_CRM_1692611885']['items']):
+        prize = str(x['VALUE']).split('|')
+        if prize[2] == "Y":
+            json_data.append({"id": id, "intId": x['ID'], "name": prize[0], "link": prize[3] + '.jpg'})
+            chances.append(float(prize[1]))
 
     selectedPrize = random.choices(json_data, weights=chances, k=1)
 
+    phone = addWinner(user_id, selectedPrize[0]['name'])
+
+    print(f'+{phone}')
+
+    contact = b.get_all('crm.contact.list',
+                        params={
+                            'filter': {'PHONE': f'+{phone}'},
+                            'select': ['ID', 'NAME', 'PHONE', 'UF_CRM_1692611885']
+                        })
+    print(contact)
+
+    bitrixUserId = contact[0]['ID']
+    bitrixUserPrizes = contact[0]['UF_CRM_1692611885']
+    bitrixUserPrizes.append(int(selectedPrize[0]['intId']))
+
+    print(bitrixUserId)
+    print(bitrixUserPrizes)
+
+    addPrize = b.get_all('crm.contact.update',
+                         params={
+                             "id": bitrixUserId,
+                             "fields": {
+                                 "UF_CRM_1692611885": bitrixUserPrizes
+                             }
+                         })
+
+    print(addPrize)
+
     response = flask.jsonify(selectedPrize)
-
-    #addWinner(user_id, selectedPrize[0]['name'])
-
     return response
 
 
@@ -281,7 +315,8 @@ def flask_getWinner():
 @bot.message_handler(commands=['start'], func=lambda message: True)
 def send_welcome(message):
     try:
-        userUpdate(message.chat.id, message.from_user.username, "0000000000", message.from_user.first_name, message.from_user.last_name, 1)
+        userUpdate(message.chat.id, message.from_user.username, "70000000000", message.from_user.first_name,
+                   message.from_user.last_name, 1)
         keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=True)
         button_phone = types.KeyboardButton(text="Отправить номер телефона", request_contact=True)
         keyboard.add(button_phone)
@@ -421,12 +456,13 @@ def order_findOrder(message):
         """)
         bot.register_next_step_handler(msg, order_findOrder)
 
-@bot.message_handler(content_types="web_app_data") #получаем отправленные данные
+
+@bot.message_handler(content_types="web_app_data")  # получаем отправленные данные
 def wheelAnswer(webAppMes):
-   print(webAppMes) #вся информация о сообщении
-   print(webAppMes.web_app_data.data) #конкретно то что мы передали в бота
-   bot.send_message(webAppMes.chat.id, f"получили инофрмацию из веб-приложения: {webAppMes.web_app_data.data}")
-   #отправляем сообщение в ответ на отправку данных из веб-приложения
+    print(webAppMes)  # вся информация о сообщении
+    print(webAppMes.web_app_data.data)  # конкретно то что мы передали в бота
+    bot.send_message(webAppMes.chat.id, f"получили информацию из веб-приложения: {webAppMes.web_app_data.data}")
+    # отправляем сообщение в ответ на отправку данных из веб-приложения
 
 
 def userUpdate(chatId, username, phone, name, surname, isNew):
@@ -443,6 +479,7 @@ def userUpdate(chatId, username, phone, name, surname, isNew):
     except Exception as e:
         print(e)
 
+
 def userActions(chatId, order):
     try:
         dbConnection.ping(True)
@@ -454,6 +491,7 @@ def userActions(chatId, order):
         dbConnection.commit()
     except Exception as e:
         print(e)
+
 
 def addTrack(chatId, order):
     try:
@@ -476,6 +514,7 @@ def addTrack(chatId, order):
     except Exception as e:
         print(e)
 
+
 def addWinner(chatId, prize):
     try:
         dbConnection.ping(True)
@@ -486,6 +525,14 @@ def addWinner(chatId, prize):
                 VALUES('{chatId}', (SELECT user_phone FROM users WHERE users.user_id = '{chatId}'), '{prize}')  
                 """)
         dbConnection.commit()
+
+        cursor = dbConnection.cursor()
+        cursor.execute(f"""
+                        SELECT user_phone FROM users WHERE user_id = '{chatId}'  
+                        """)
+
+        phone = cursor.fetchall()
+        return phone[0][0]
     except Exception as e:
         print(e)
 

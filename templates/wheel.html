@@ -82,7 +82,7 @@
             while (xhttp.responseText == undefined || !loaded) {
                loaded = true;
                xhttp.onload = function() {
-
+					console.log("Available prizes");
                   console.log(this.responseText);
                   response = JSON.parse(this.responseText);
 
@@ -236,7 +236,7 @@
          function spin(d) {
             container.on("click", null);
 
-            console.log("asd")
+            console.log("Getting prize...")
             let prize;
 
             const xhttp = new XMLHttpRequest();
@@ -244,7 +244,7 @@
                console.log(this.responseText);
                response = JSON.parse(this.responseText);
                prize = response[0]['id'];
-               console.log(prize);
+               console.log("Prize: "+ prize);
                setPrize(d, prize)
             }
             xhttp.open("GET", "http://127.0.0.1:8000/getWinner?user_id="+userId, true);
@@ -278,7 +278,7 @@
                .duration(3000)
                .attrTween("transform", rotTween)
                .each("end", function() {
-                  document.getElementById("prizeImg").src = data[picked].link;
+                  document.getElementById("prizeImg").src = '/static/'+data[picked].link;
                   d3.select("#question h1").text(data[picked].question);
                   myModal.open('#myModal');
                   container.on("click", spin);
