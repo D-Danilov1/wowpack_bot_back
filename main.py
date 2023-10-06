@@ -2,7 +2,7 @@ import json
 import os
 import threading
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import webbrowser
 import random
 
@@ -65,7 +65,7 @@ print("Connected to DB")
 application = Flask(__name__)
 application.config['JSON_AS_ASCII'] = False
 application.config['JSON_SORT_KEYS'] = False
-threading.Thread(target=lambda: application.run(host=HOST, port=PORT)).start()
+threading.Thread(target=lambda: application.run(host=HOST, port=PORT, ssl_context=('cert.pem', 'cert-key.pem'))).start()
 
 
 @application.route('/', methods=['GET', 'POST'])
@@ -100,7 +100,7 @@ def flask_updateSheetCallback():
         for user in usersList:
             print(user)
             # Send message if found
-            managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
+            managerContact_btn = types.InlineKeyboardButton('Задать вопрос',
                                                             url='https://t.me/' + BOT_MANAGER_NICKNAME)
             managerKeyboard = types.InlineKeyboardMarkup()
             managerKeyboard.add(managerContact_btn)
@@ -231,7 +231,7 @@ def flask_getWheelPrizes():
                 """)
     winnersList = cursor.fetchall()
 
-    # if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
+    #if (len(winnersList) != 0 and (datetime.now() - winnersList[0][4]).days <= int(WHEEL_DAYS)): abort(503)
 
     prizes = b.get_all('crm.contact.fields')
     json_data = []
@@ -239,9 +239,10 @@ def flask_getWheelPrizes():
     for id, x in enumerate(prizes['UF_CRM_1692611885']['items']):
         prize = str(x['VALUE']).split('|')
         if prize[2] == "Y":
-            json_data.append({"id": id, "name": prize[0], "link": prize[3] + '.jpg'})
+            json_data.append({"id": id, "name": prize[0], "link": prize[3]})
 
     response = flask.jsonify(json_data)
+    response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
 
@@ -278,6 +279,7 @@ def flask_getWinner():
             chances.append(float(prize[1]))
 
     selectedPrize = random.choices(json_data, weights=chances, k=1)
+    print(selectedPrize)
 
     phone = addWinner(user_id, selectedPrize[0]['name'])
 
@@ -308,6 +310,16 @@ def flask_getWinner():
     print(addPrize)
 
     response = flask.jsonify(selectedPrize)
+    response.headers.add('Access-Control-Allow-Origin', '*')
+
+    print(selectedPrize)
+
+    bot.send_message(user_id, f"""\
+{date.today().strftime("%d.%m")}: Поздравляем с выигрышем приза "{selectedPrize[0]['name']}"! 
+Использовать его вы можете при обращении к менеджеру.
+Следующее вращение доступно {(date.today() + timedelta(days=int(WHEEL_DAYS))).strftime("%d.%m.%Y")}
+    """, parse_mode='Markdown')
+
     return response
 
 
@@ -391,7 +403,7 @@ def registration_checkPhone(chatId, message, info):
         #         isPhoneFound = True
         #
         # if not isPhoneFound:
-        #     managerContact_btn = types.InlineKeyboardButton('Связаться с менеджером',
+        #     managerContact_btn = types.InlineKeyboardButton('Задать вопрос',
         #                                                     url='https://t.me/' + BOT_MANAGER_NICKNAME)
         #     managerKeyboard = types.InlineKeyboardMarkup()
         #     managerKeyboard.add(managerContact_btn)
@@ -403,13 +415,15 @@ def registration_checkPhone(chatId, message, info):
 
         userUpdate(chatId, info.from_user.username, tempMessage, info.from_user.first_name, info.from_user.last_name, 0)
 
-        managerKeyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        wheel = types.InlineKeyboardButton(text="Колесо удачи", web_app=WebAppInfo(url="https://127.0.0.1:8000/wheel"))
-        managerContact_btn = types.KeyboardButton('Связаться с менеджером')
+        managerKeyboard = types.InlineKeyboardMarkup()
+        wheel = types.InlineKeyboardButton(text="Колесо удачи", url="https://wowpack-dev.ru/wheel?url="+str(chatId))
+        managerContact_btn = types.InlineKeyboardButton(text='Задать вопрос', url='https://t.me/' + BOT_MANAGER_NICKNAME)
         managerKeyboard.add(managerContact_btn, wheel)
 
+        bot.send_message(chatId, f"""Регистрация завершена""", reply_markup=types.ReplyKeyboardRemove())
+
         msg = bot.send_message(chatId, f"""
-        Отлично! Теперь можете присылать боту номера заказов, а он расскажет о их статусе.
+        Отлично! Теперь вы можете присылать боту номера заказов, а он расскажет о их статусе.
         """, reply_markup=managerKeyboard)
         bot.register_next_step_handler(msg, order_findOrder)
 
@@ -432,21 +446,23 @@ def order_findOrder(message):
         stop_bot(message)
         return None
 
-    if message.text == "Связаться с менеджером":
-        webbrowser.open('https://t.me/' + BOT_MANAGER_NICKNAME)
-        return None
-
     try:
         cell = sh.sheet1.find(orderNumber, in_column=1)
 
         userActions(message.chat.id, orderNumber)
+
+        managerKeyboard = types.InlineKeyboardMarkup()
+        wheel = types.InlineKeyboardButton(text="Колесо удачи", url="https://wowpack-dev.ru/wheel?url="+str(message.chat.id))
+        managerContact_btn = types.InlineKeyboardButton(text='Задать вопрос',
+                                                        url='https://t.me/' + BOT_MANAGER_NICKNAME)
+        managerKeyboard.add(managerContact_btn, wheel)
 
         msg = bot.send_message(message.chat.id, f"""\
 Номер груза: `{sh.sheet1.cell(cell.row, 1).value}`
 Дата отправки: {sh.sheet1.cell(cell.row, 2).value}
 Примерная дата поступления: {sh.sheet1.cell(cell.row, 4).value}
 Статус: *{sh.sheet1.cell(cell.row, 3).value}*
-        """, parse_mode='Markdown')
+        """, parse_mode='Markdown', reply_markup=managerKeyboard)
         bot.register_next_step_handler(msg, order_findOrder)
 
         addTrack(message.chat.id, orderNumber)
@@ -455,14 +471,6 @@ def order_findOrder(message):
         Извините, мы не смогли найти заказ. Проверьте номер заказа и отправь его ещё раз.
         """)
         bot.register_next_step_handler(msg, order_findOrder)
-
-
-@bot.message_handler(content_types="web_app_data")  # получаем отправленные данные
-def wheelAnswer(webAppMes):
-    print(webAppMes)  # вся информация о сообщении
-    print(webAppMes.web_app_data.data)  # конкретно то что мы передали в бота
-    bot.send_message(webAppMes.chat.id, f"получили информацию из веб-приложения: {webAppMes.web_app_data.data}")
-    # отправляем сообщение в ответ на отправку данных из веб-приложения
 
 
 def userUpdate(chatId, username, phone, name, surname, isNew):
